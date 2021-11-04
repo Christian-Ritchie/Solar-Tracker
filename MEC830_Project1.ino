@@ -2,6 +2,9 @@
 #include <Servo.h>
 #include <PID_v1.h>
 
+int RightAnalog = 0;
+int LeftAnalog = 1;
+
 const int stepsPerRevolution = 64;
 
 Servo servo;
@@ -9,10 +12,13 @@ Servo servo;
 Stepper Step1(stepsPerRevolution, 8, 9, 10, 11);
 Stepper Step2(stepsPerRevolution, 11, 10, 9, 8);
 
-int stepCount = 0;
+int ErrorBand = 20;
 int i;
+int MeasurementDelay=150;
+int AltRange=3;
 double LeftSensor;
 double RightSensor;
+double SensorAverage;
 double Error;
 double MaxValue=0;
 int Max;
@@ -23,7 +29,7 @@ double Lower;
 double Mid;
 
 double Setpoint, Input, Output;
-double Kp=1, Ki=0.1, Kd=0.02;
+double Kp=1, Ki=2, Kd=1;
 PID PID1(&Input, &Output, &Setpoint, Kp, Ki, Kd, REVERSE);
 
 void setup() {
@@ -44,13 +50,13 @@ void loop() {
 
 void Azimuth (){
   Serial.print(" 1");
-  LeftSensor = analogRead(A1);
-  RightSensor = analogRead(A0);
+  LeftSensor = analogRead(LeftAnalog);
+  RightSensor = analogRead(RightAnalog);
   Error=LeftSensor-RightSensor;
   Input=Error;
-  while (Error>20||Error<-20){
-    LeftSensor = analogRead(A1);
-    RightSensor = analogRead(A0);
+  while (Error>ErrorBand||Error<-ErrorBand){
+    LeftSensor = analogRead(LeftAnalog);
+    RightSensor = analogRead(RightAnalog);
     Serial.print("LeftSensor: ");
     Serial.print(LeftSensor);
     Serial.print(" RightSensor: ");
@@ -60,9 +66,6 @@ void Azimuth (){
     Input=Error;
     Serial.print(" Error: ");
     Serial.print(Error);
-    if (Error<20&&Error>-20){
-      break;
-    }
 
     if(Error < 0){
       Input=abs(Input);
@@ -74,11 +77,15 @@ void Azimuth (){
     PID1.Compute();
     Serial.print(" Output: ");
     Serial.print(Output);
+
+    if (Output<ErrorBand&&Output>-ErrorBand){
+      break;
+    }
     int motorSpeed = map(Output, 0, 255, 0, 200);
  
     if (Direction==false) {
       Step1.setSpeed(motorSpeed);
-      Step1.step(-stepsPerRevolution );
+      Step1.step(-stepsPerRevolution);
     } else if (Direction==true){
       Step1.setSpeed(motorSpeed);
       Step1.step(stepsPerRevolution );
@@ -93,10 +100,10 @@ void InitialAltitude (){
     Serial.print(j);
     servo.write(j);
     delay(10);
-    RightSensor = analogRead(A0);
-    if (RightSensor>MaxValue){
+    SensorAverage = Measure();
+    if (SensorAverage>MaxValue){
       Max=j;
-      MaxValue=RightSensor;
+      MaxValue=SensorAverage;
     }
   }
   Serial.print(" MaxAngle: ");
@@ -106,36 +113,53 @@ void InitialAltitude (){
   servo.write(Max);
   i=Max;
   delay(1000);
+  if (i>90){
+    RightAnalog=1;
+    LeftAnalog=0;
+  }else{
+    RightAnalog=0;
+    LeftAnalog=1;
+  }
 }
 
 void Altitude(){
-  Mid = analogRead(A0);
-  i+=5;
+  Serial.print(" 2");
+  Mid = Measure();
+  i+=AltRange;
   servo.write(i);
-  delay(100);
-  Higher=analogRead(A0);
-  i-=10;
+  delay(MeasurementDelay);
+  Higher=Measure();
+  i-=AltRange*2;
   servo.write(i);
-  delay(100);
-  Lower=analogRead(A0);
-  i+=5;
+  delay(MeasurementDelay);
+  Lower=Measure();
+  i+=AltRange;
 
-while(Higher>Mid+5||Lower>Mid+5){
-  if(Higher>Mid+5&&Higher>Lower){
-    RaiseAltitude();
-    i+=5;
-    servo.write(i);
-    delay(100);
-    Higher=analogRead(A0);
+  while(Higher>Mid+AltRange||Lower>Mid+AltRange){
+    if(Higher>Mid+AltRange&&Higher>Lower){
+      RaiseAltitude();
+      i+=AltRange;
+      servo.write(i);
+      delay(MeasurementDelay);
+      Higher=Measure();
+    }
+    if(Lower>Higher&&Lower>Mid+AltRange){
+      LowerAltitude();
+      i-=AltRange;
+      servo.write(i);
+      delay(MeasurementDelay);
+      Lower=Measure();
+    }
+    if (Higher==Lower){
+      break;
+    }
   }
-  if(Lower>Higher&&Lower>Mid+5){
-    LowerAltitude();
-    i-=5;
-    servo.write(i);
-    delay(100);
-    Lower=analogRead(A0);
+  if (i<AltRange){
+    i=AltRange;
   }
-}
+  if (i>180-AltRange){
+    i=180-AltRange;
+  }
   Serial.print(" Higher: ");
   Serial.print(Higher);
   Serial.print(" Mid: ");
@@ -145,19 +169,32 @@ while(Higher>Mid+5||Lower>Mid+5){
   Serial.print(" i: ");
   Serial.print(i);
   servo.write(i);
-  delay(100);
+  if (i>90){
+    RightAnalog=1;
+    LeftAnalog=0;
+  }else{
+    RightAnalog=0;
+    LeftAnalog=1;
+  }
 }
 
 void RaiseAltitude(){
-  i+=5;
+  i+=AltRange;
   servo.write(i);
-  delay(100);
-  Mid=analogRead(A0);
+  delay(MeasurementDelay);
+  Mid=Measure();
 }
 
 void LowerAltitude(){
-  i-=5;
+  i-=AltRange;
   servo.write(i);
-  delay(100);
-  Mid=analogRead(A0);
+  delay(MeasurementDelay);
+  Mid=Measure();
+}
+
+double Measure(){
+  LeftSensor = analogRead(LeftAnalog);
+  RightSensor = analogRead(RightAnalog);
+  SensorAverage=(LeftSensor+RightSensor)/2;
+  return SensorAverage;
 }
